@@ -17,8 +17,8 @@ NATURAL_FIXTURE="${REPO_ROOT}/skills/natural-japanese/scripts/fixtures/natural.m
 
 # Expected finding counts. Update these if you deliberately change the
 # fixtures or the detector rules.
-EXPECTED_SMELLY_DEFAULT=27
-EXPECTED_SMELLY_EXPERIMENTAL=34
+EXPECTED_SMELLY_DEFAULT=29
+EXPECTED_SMELLY_EXPERIMENTAL=36
 EXPECTED_NATURAL_DEFAULT=0
 EXPECTED_NATURAL_EXPERIMENTAL=0
 

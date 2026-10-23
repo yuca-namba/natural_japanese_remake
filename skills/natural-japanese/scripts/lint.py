@@ -376,7 +376,8 @@ GENRE_PROFILES: dict[str, dict] = {
         "reading_load_sentence_max_chars": 110,
         # 過去の事実に「のです」を付ける語り(narrative_noda)は、エッセイでは書き手の語り口である
         # (人の書いた note のエッセイや青空文庫の随筆に多い)。エッセイでは出さない。
-        "disabled_categories": {"narrative_noda"},
+        # 「〜のは〜である」の語り(cleft_sentence)も、随筆では人がよく使う(1000文あたり32.7)。
+        "disabled_categories": {"narrative_noda", "cleft_sentence"},
     },
     "tech": {
         # tech記事は人間もAIも見出し・箇条書き構成に寄るため差が縮む。
@@ -1729,6 +1730,54 @@ def detect_narrative_noda(tokenized: list[TokenizedSentence]) -> list[Finding]:
 
 
 # ---------------------------------------------------------------------------
+# 中身を「〜のは」「〜かは」でまとめて名詞で受ける文
+#
+# 「［製品A］が対象にするのは、帳票業務のうち作成・配信・保管の3工程です。」
+# 「どの版を選ぶかは、帳票に差し込むデータをどのシステムが持っているかで決まります。」
+# 言いたい中身を「〜のは」「〜かは」で主題にまとめ、名詞の「〜です」や「〜で決まる」で
+# 受ける文。動詞の文(「［製品A］は、〜の3つを自動化します」)より堅く、回りくどい。
+# 1000文あたり、これまでの AI の題材5本では23.6、人の書いた Web 文書93本では3.7だった。
+# 青空文庫の随筆では32.7と人も多く使う(「〜のは〜である」は随筆の語り方)ので、
+# --genre essay では出さない。読み手の誤解を正す文や、問いに答える文では正しい使い方なので、
+# 候補として出す(情報)。形容詞で受ける文(「続けるのは簡単ではありませんでした」)と、
+# 「〜というのは」で語を定義する文(「TCCというのは、〜」)は数えない。
+# ---------------------------------------------------------------------------
+_CLEFT_RE = re.compile(r"(?:のは|かは)、?.+(?:です|だ|である|でした|だった)$")
+_JUDGE_RE = re.compile(r"(?:かは|かどうかは)、?.+(?:で決まる|で決まります|で決まりました|次第です|次第だ|によります|による)$")
+_CLEFT_COPULAS = {"です", "だ", "である", "でし", "だっ", "で"}
+
+
+def detect_cleft_sentence(tokenized: list[TokenizedSentence]) -> list[Finding]:
+    findings = []
+    for ts in tokenized:
+        text = ts.text.strip()
+        # 「〜というのは」「〜とは」は語の定義なので数えない(「TCCというのは、〜」)
+        if re.search(r"(?:という|って)の?は", text):
+            continue
+        judge = bool(_JUDGE_RE.search(text))
+        if not judge:
+            if not _CLEFT_RE.search(text):
+                continue
+            # 名詞の「〜です」で受けているかを見る(形容詞や「〜ではない」で受ける文は数えない)
+            content = [m for m in ts.morphemes if m.part_of_speech()[0] not in TRAILING_SYMBOL_POS]
+            i = len(content) - 1
+            while i >= 0 and content[i].part_of_speech()[0] == "助動詞":
+                i -= 1
+            if i < 0 or content[i].part_of_speech()[0] != "名詞" or content[i].surface() in {"の", "ん"}:
+                continue
+        findings.append(
+            Finding(
+                line=ts.line,
+                category="cleft_sentence",
+                excerpt=ts.raw_text.strip()[:60],
+                severity="info",
+                detail="中身を「〜のは」「〜かは」で主題にまとめ、名詞や「〜で決まる」で受けている。動詞の文のほうが素直に読めないかを見る",
+            )
+        )
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # 構造層検出器（2026-07 コーパス校正で新設）
 #
 # ここまでの検出器はすべて Markdown 構造をマスクした「地の文」に対して働く。
@@ -2528,6 +2577,7 @@ HINTS = {
     "high_bold_density": "文中の強調の太字は、文書全体で本当に目立たせたい数か所だけに残す。箇条や行の頭の「**ラベル**:」は、項目を探す目印なので残してよい",
     "high_bullet_ratio": "因果や経緯のある箇条書きは地の文に戻す。宿題の一覧のように本当に独立した項目は残す",
     "boilerplate_heading": "「まとめ」「おわりに」のような見出しをやめ、結論そのものを見出しにするか、見出しなしで締める",
+    "cleft_sentence": "動詞の文に戻す(「［製品A］が対象にするのは、〜の3工程です」→「［製品A］は、〜の3つを自動化します」、「どの版を選ぶかは、〜かで決まります」→「〜に合わせて、版を選びます」)。読み手の誤解を正す文や、問いに答える文(「問題だったのは、設定ではなく回線でした」)なら残す",
     "narrative_noda": "前に書いた出来事の理由や正体を明かす文なら残す。ただの事実なら「のです」を外して言い切る(「かかっていたのです」→「かかっていました」)",
     "topic_shift_subject": "その名詞が、前の文や見出しで話題になっているかを見る。話題になっていて、その説明として読めるなら残す。話題になっていないなら、主語の流れを前の文に合わせる。書き手自身の行為(刷新・変更・この記事)を主語に立てているなら、目的は行為を書いた文に「〜よう」「〜ため」でつなぐ(「今回の刷新は、〜を解消するための取り組みです」→「〜を解消できるよう、システムを刷新しました」)",
     "copy_style_heading": "警告なら、話題を示す名詞句(「申請の流れ」)か、述語まで言い切る文(「申請は窓口に行かずに終わる」)にする。省いた述語や「何がどうなるか」は、その節の本文にある言葉で書く。本文にないなら足さず、話題を示す名詞句にとどめる。同じ形の見出しが並ぶなら、全部をまとめて見直す。情報なら、見出しが節の要点と合っているかだけを確かめ、合っていれば残す",
@@ -2603,6 +2653,7 @@ def run_lint(
     findings += detect_inanimate_subject_morph(tokenized)
     findings += detect_topic_shift_subject(tokenized, mask_html_comments(raw_text))
     findings += detect_narrative_noda(tokenized)
+    findings += detect_cleft_sentence(tokenized)
     # nested_attributive はコーパス校正で削除済み（上のコメント参照）。
 
     rhythm_findings, rhythm_stats = detect_rhythm_statistics(tokenized)
