@@ -27,7 +27,7 @@ Claude Code 以外のエージェント(Cursor, ChatGPT, Codex など)からも�
 
 ## 検査スクリプトの実行
 
-Python の実行は [uv](https://docs.astral.sh/uv/) を前提にしています。`pip install` や仮想環境の手動作成は不要です。主な検査スクリプトは6つあります。
+Python の実行は [uv](https://docs.astral.sh/uv/) を前提にしています。`pip install` や仮想環境の手動作成は不要です。主な検査スクリプトは6つあります。パワーポイントの文字を取り出すスクリプトもあります。
 
 ```bash
 uv run skills/natural-japanese/scripts/lint.py path/to/draft.md      # 疑わしい表現の検出。指摘ごとに直し方が付く(--json / --genre / --baseline)
@@ -36,6 +36,7 @@ uv run skills/natural-japanese/scripts/terms.py path/to/draft.md     # 専門用
 uv run skills/natural-japanese/scripts/newfacts.py original.md revised.md  # 直した文書にだけある数値・固有名詞・英字の語
 uv run skills/natural-japanese/scripts/paragraphs.py path/to/draft.md   # 段落ごとの確かめ用の表(取れない言い回しを段落ごとに書き出す)
 uv run skills/natural-japanese/scripts/calques.py path/to/draft.md     # 仕組みを場所にたとえた名詞と、機械の処理に当てた動詞の候補(入口・効く・拾う など)
+uv run skills/natural-japanese/scripts/pptx_to_md.py deck.pptx > slides.md  # パワーポイントのスライドの文字を、見出しと本文の形の Markdown にする
 ```
 
 依存関係(sudachipy, sudachidict-core)は各スクリプト冒頭の PEP 723 インラインメタデータで宣言されているため、

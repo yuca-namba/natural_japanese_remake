@@ -90,6 +90,7 @@ uv run skills/natural-japanese/scripts/outline.py draft.md               # 見�
 uv run skills/natural-japanese/scripts/terms.py draft.md                 # 専門用語の初出と説明の有無
 uv run skills/natural-japanese/scripts/paragraphs.py draft.md            # 段落ごとの確認用の一覧
 uv run skills/natural-japanese/scripts/newfacts.py original.md revised.md  # 直した文書にだけある数値・固有名詞
+uv run skills/natural-japanese/scripts/pptx_to_md.py deck.pptx > slides.md  # パワーポイントのスライドの文字を Markdown にする
 ```
 
 スクリプトを変えたときは、`./dev/check-fixtures.sh` で回帰テストを実行してください(`git config core.hooksPath .githooks` を設定すると、コミット時にも実行されます)。
