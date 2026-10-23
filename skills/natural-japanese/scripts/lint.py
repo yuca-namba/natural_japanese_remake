@@ -374,6 +374,9 @@ GENRE_PROFILES: dict[str, dict] = {
         # （tech/business はいずれも0.0%）。エッセイの長い一文は書き手の呼吸で
         # あることが多いため、共通の90字より緩める。
         "reading_load_sentence_max_chars": 110,
+        # 過去の事実に「のです」を付ける語り(narrative_noda)は、エッセイでは書き手の語り口である
+        # (人の書いた note のエッセイや青空文庫の随筆に多い)。エッセイでは出さない。
+        "disabled_categories": {"narrative_noda"},
     },
     "tech": {
         # tech記事は人間もAIも見出し・箇条書き構成に寄るため差が縮む。
@@ -1690,6 +1693,40 @@ def detect_topic_shift_subject(tokenized: list[TokenizedSentence], raw_text: str
 
 
 # ---------------------------------------------------------------------------
+# 種明かしの調子の「〜たのです」
+#
+# 「この作業だけで、毎日1時間以上かかっていたのです。」のように、過去の事実に
+# 「のです」「んです」「のだ」を付けた文。人がこの形を使うのは、前に書いた出来事の
+# 理由や正体を明かすときである(人の書いた Web 文書93本では3本に1文ずつで、
+# 「〜ため、CPU使用率に悪影響が出ていたのです」のように、どれも原因を明かしていた)。
+# 明かすべきことが前にないのに使うと、ただの事実を物語の種明かしの調子で言う形になる。
+# 理由や正体を明かしているかは機械では判定できないので、候補として出す(情報)。
+# --genre essay では出さない(エッセイでは書き手の語り口である)。
+# ---------------------------------------------------------------------------
+# だ・である体の「〜たのだ」はエッセイや随筆のふつうの語りなので数えず、です・ます体の
+# 「〜たのです」「〜たんです」だけを見る。かぎ括弧で終わる会話文も数えない
+_NARRATIVE_NODA_RE = re.compile(r"(?:た|だっ)(?:の|ん)です(?:よ|ね)?$")
+
+
+def detect_narrative_noda(tokenized: list[TokenizedSentence]) -> list[Finding]:
+    findings = []
+    for ts in tokenized:
+        text = ts.text.strip()
+        if not _NARRATIVE_NODA_RE.search(text):
+            continue
+        findings.append(
+            Finding(
+                line=ts.line,
+                category="narrative_noda",
+                excerpt=ts.raw_text.strip()[-60:],
+                severity="info",
+                detail="過去の事実に「のです」を付けている。前に書いた出来事の理由や正体を明かす文でなければ、種明かしの調子になる",
+            )
+        )
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # 構造層検出器（2026-07 コーパス校正で新設）
 #
 # ここまでの検出器はすべて Markdown 構造をマスクした「地の文」に対して働く。
@@ -2452,6 +2489,7 @@ HINTS = {
     "high_bold_density": "文中の強調の太字は、文書全体で本当に目立たせたい数か所だけに残す。箇条や行の頭の「**ラベル**:」は、項目を探す目印なので残してよい",
     "high_bullet_ratio": "因果や経緯のある箇条書きは地の文に戻す。宿題の一覧のように本当に独立した項目は残す",
     "boilerplate_heading": "「まとめ」「おわりに」のような見出しをやめ、結論そのものを見出しにするか、見出しなしで締める",
+    "narrative_noda": "前に書いた出来事の理由や正体を明かす文なら残す。ただの事実なら「のです」を外して言い切る(「かかっていたのです」→「かかっていました」)",
     "topic_shift_subject": "その名詞が、前の文や見出しで話題になっているかを見る。話題になっていて、その説明として読めるなら残す。話題になっていないなら、主語の流れを前の文に合わせる。書き手自身の行為(刷新・変更・この記事)を主語に立てているなら、目的は行為を書いた文に「〜よう」「〜ため」でつなぐ(「今回の刷新は、〜を解消するための取り組みです」→「〜を解消できるよう、システムを刷新しました」)",
     "copy_style_heading": "警告なら、話題を示す名詞句(「申請の流れ」)か、述語まで言い切る文(「申請は窓口に行かずに終わる」)にする。省いた述語や「何がどうなるか」は、その節の本文にある言葉で書く。本文にないなら足さず、話題を示す名詞句にとどめる。同じ形の見出しが並ぶなら、全部をまとめて見直す。情報なら、見出しが節の要点と合っているかだけを確かめ、合っていれば残す",
     "numbered_phase_structure":"内容がもともと段階を持つときだけ番号を付ける",
@@ -2525,6 +2563,7 @@ def run_lint(
     findings += nominal_and_conj_findings
     findings += detect_inanimate_subject_morph(tokenized)
     findings += detect_topic_shift_subject(tokenized, mask_html_comments(raw_text))
+    findings += detect_narrative_noda(tokenized)
     # nested_attributive はコーパス校正で削除済み（上のコメント参照）。
 
     rhythm_findings, rhythm_stats = detect_rhythm_statistics(tokenized)
