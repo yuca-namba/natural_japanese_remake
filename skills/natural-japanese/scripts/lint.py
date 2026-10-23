@@ -1608,8 +1608,10 @@ def detect_inanimate_subject_morph(tokenized: list[TokenizedSentence]) -> list[F
 # 「これは〜に近い」と説明するのは、ふつうの流れである。直前に描いたものを別の
 # 名詞で受け直す文(人物を描いたあとの「この作者は」)も、人の文章にはごく多い。
 # そこで、「この/今回の/こうした + 名詞 + は」で始まり、主語の中心の名詞が行為を
-# 表す名詞(サ変名詞か「取り組み」「試み」など)で、その名詞が直前の文にも直前の
-# 見出しにも出てこない文だけを候補として出す。話題になっているかの最終判断は
+# 表す名詞(サ変名詞か「取り組み」「試み」など)で、その名詞が文書のそれより前の部分
+# (見出し・箇条書き・表を含む)に一度も出てこない文だけを候補として出す。人の書いた
+# Web 文書93本では、直前の文と見出しだけを見ると「今回の転職活動は」(題名で話題に
+# している)のような自然な文が10件残った。話題になっているかの最終判断は
 # エージェントに任せる。
 # ---------------------------------------------------------------------------
 _TOPIC_DETERMINER_RE = re.compile(
@@ -1656,8 +1658,7 @@ def _is_action_noun(morpheme) -> bool:
 
 
 def detect_topic_shift_subject(tokenized: list[TokenizedSentence], raw_text: str) -> list[Finding]:
-    heading_lines = sorted(no for no, line in iter_lines_with_no(raw_text) if _HEADING_RE.match(line))
-    raw_lines_by_no = dict(iter_lines_with_no(raw_text))
+    raw_lines = iter_lines_with_no(raw_text)
     findings = []
     for idx, ts in enumerate(tokenized):
         found = _topic_subject_nouns(ts)
@@ -1665,15 +1666,12 @@ def detect_topic_shift_subject(tokenized: list[TokenizedSentence], raw_text: str
             continue
         nouns, wa = found
         content = [m for m in nouns if m.surface() not in _TOPIC_GENERIC_NOUNS and m.part_of_speech()[1] != "数詞"]
-        if not content:
+        if not content or not _is_action_noun(content[-1]):
             continue
-        if not _is_action_noun(content[-1]):
-            continue
-        context = tokenized[idx - 1].raw_text if idx > 0 else ""
-        prior_headings = [no for no in heading_lines if no < ts.line]
-        if prior_headings:
-            context += raw_lines_by_no.get(prior_headings[-1], "")
-        if any(m.surface() in context or m.normalized_form() in context for m in content):
+        # 文書のそれより前の部分(同じ行で前にある文を含む)
+        earlier = "".join(line for no, line in raw_lines if no < ts.line)
+        earlier += "".join(t.raw_text for t in tokenized[:idx] if t.line == ts.line)
+        if any(m.surface() in earlier or m.normalized_form() in earlier for m in content):
             continue
         subject = ts.raw_text[ts.morphemes[0].begin() : ts.morphemes[wa].end()].strip()
         findings.append(
@@ -1683,7 +1681,7 @@ def detect_topic_shift_subject(tokenized: list[TokenizedSentence], raw_text: str
                 excerpt=ts.raw_text.strip()[:60],
                 severity="info",
                 detail=(
-                    f"主語「{subject}」の名詞が、直前の文にも直前の見出しにも出てこない。"
+                    f"主語「{subject}」の名詞が、文書のそれより前の部分に出てこない。"
                     "話題になっていないものを急に主語に立てて説明している疑い"
                 ),
             )
@@ -1874,8 +1872,11 @@ def detect_structural_ai_habits(raw_text: str) -> tuple[list[Finding], dict]:
 #   1. 読点で前後に割り、末尾で述語を省いている(「こんなシーンで、かんたんに」)。
 #      前後に割る読点とは、直前が助詞か、動詞・形容詞・助動詞の連用形のもの。直前が名詞の
 #      読点(「東京、大阪」「在宅勤務、三年やってみて」)と、並列の「と、」は数えない
-#   2. 「を」の直後に読点を打ち、目的語と動詞を切り離している(「相談を、申請完了までつなぐ」)
-#   3. 見出しの末尾に「。」がある(見出しを一文のコピーとして書いた印)
+#   2. 20字以下の短い見出しで、「を」の直後に読点を打ち、目的語と動詞を切り離している
+#      (「相談を、申請完了までつなぐ」)
+# 1か2に当たる見出しの末尾に「。」があれば、見出しを一文のコピーとして書いた印として
+# 理由に添える。「。」だけの見出しは、くだけたブログの見出し(「不肖 人語さん、退職する。」)に
+# よくあるので数えない。
 #
 # 同じ関数で、読み手への呼びかけで終わる見出し(「まずは触ってみてください」)も
 # appeal_heading として拾う。見出しが節の事実(日付・対象・機能名)を言わず、
@@ -1884,8 +1885,11 @@ def detect_structural_ai_habits(raw_text: str) -> tuple[list[Finding], dict]:
 COPY_HEADING_MAX_CHARS = 40
 _COPY_HEADING_PARTICLES = {"格助詞", "係助詞", "副助詞", "接続助詞"}
 _HEADING_MARKUP_RE = re.compile(r"^\s*#{1,6}\s*|\s*#+\s*$|\*\*|__")
-# 括弧の中は補足なので、読点の判定から外す
-_HEADING_PAREN_RE = re.compile(r"[（(][^）)]*[）)]")
+# 括弧の中は補足や引用なので、読点の判定から外す
+_HEADING_PAREN_RE = re.compile(r"[（(][^）)]*[）)]|「[^」]*」|『[^』]*』")
+# 「を、」は短い見出しでだけ数える。長い見出しでは、目的語のあとに長い修飾が
+# 挟まる位置の読点(「共通するロジックを、他の人にも使ってもらうために別モジュールに切り出す」)がふつうにある
+COPY_HEADING_WO_MAX_CHARS = 20
 _APPEAL_HEADING_RE = re.compile(r"(?:ください|ましょう|ませんか|てみよう|しよう)[。！!?？]?$")
 
 
@@ -1941,9 +1945,9 @@ def detect_copy_style_headings(raw_text: str) -> list[Finding]:
             split, wo = _heading_commas(morphemes)
             if split and not _ends_with_predicate(morphemes):
                 reasons.append("読点で見出しを前後に割り、末尾で述語を省いている")
-            if wo:
+            if wo and len(heading) <= COPY_HEADING_WO_MAX_CHARS:
                 reasons.append("「を」の直後に読点を打ち、目的語と動詞を切り離している")
-        if heading.endswith("。"):
+        if reasons and heading.endswith("。"):
             reasons.append("見出しの末尾に「。」がある")
         if reasons:
             hits.append((no, heading, reasons))
