@@ -1596,6 +1596,102 @@ def detect_inanimate_subject_morph(tokenized: list[TokenizedSentence]) -> list[F
 
 
 # ---------------------------------------------------------------------------
+# 話題になっていないものを急に主語に立てる文
+#
+# 「4月1日から、社内ポータルを新しいシステムに切り替えます。これまで〜といった声を
+# 多くいただいていました。今回の刷新は、〜を解消するための取り組みです。」の3文目。
+# 前の2文の主語は(省かれた)運営者なのに、3文目で急に「今回の刷新」が主語になる。
+# 刷新はまだ話題になっていないので、誰も求めていない説明が差し込まれたように読める。
+# 同じ文でも、「Q. なぜ刷新するのですか」のあとなら自然に読める。
+#
+# 概念を主語にすること自体は問題ではない。見出しや直前の文で話題にしている対象を
+# 「これは〜に近い」と説明するのは、ふつうの流れである。直前に描いたものを別の
+# 名詞で受け直す文(人物を描いたあとの「この作者は」)も、人の文章にはごく多い。
+# そこで、「この/今回の/こうした + 名詞 + は」で始まり、主語の中心の名詞が行為を
+# 表す名詞(サ変名詞か「取り組み」「試み」など)で、その名詞が直前の文にも直前の
+# 見出しにも出てこない文だけを候補として出す。話題になっているかの最終判断は
+# エージェントに任せる。
+# ---------------------------------------------------------------------------
+_TOPIC_DETERMINER_RE = re.compile(
+    r"^(?:(?:ただ|また|そして|しかし|一方で?|なお|さらに|では|でも|だから|つまり|ところで)、)?(?:この|その|こうした|そうした|こういった|そういった|こういう|そういう|こんな|そんな|今回の|本|当)"
+)
+# サ変名詞のほかに、行為を表す名詞として数えるもの
+_TOPIC_ACTION_NOUNS = {"取り組み", "試み", "見直し", "切り替え", "入れ替え", "置き換え", "作り直し", "動き"}
+_TOPIC_GENERIC_NOUNS = {
+    "こと", "もの", "点", "場合", "方", "とき", "時", "際", "件", "ため", "辺", "あたり",
+    "話", "例", "中", "後", "前", "上", "下", "次", "ほう", "よう", "通り", "とおり", "うち",
+}
+
+
+def _topic_subject_nouns(ts: TokenizedSentence) -> tuple[list, int] | None:
+    """文頭が「(接続詞、)+ 指示語 + 名詞(の名詞) + は」なら (名詞の形態素, 「は」の位置) を返す。"""
+    text = ts.text.lstrip()
+    m = _TOPIC_DETERMINER_RE.match(text)
+    if not m:
+        return None
+    start = len(ts.text) - len(text) + m.end()
+    morphemes = ts.morphemes
+    i = next((k for k, mo in enumerate(morphemes) if mo.begin() >= start), None)
+    if i is None or morphemes[i].begin() != start:
+        return None
+    nouns = []
+    while i < len(morphemes) and len(nouns) < 6:
+        mo = morphemes[i]
+        pos = mo.part_of_speech()
+        if pos[0] in {"名詞", "接頭辞", "接尾辞"}:
+            if pos[0] == "名詞":
+                nouns.append(mo)
+        elif not (mo.surface() == "の" and nouns):
+            return (nouns, i) if pos[0] == "助詞" and mo.surface() == "は" and nouns else None
+        i += 1
+    return None
+
+
+def _is_action_noun(morpheme) -> bool:
+    """サ変名詞か、行為を表す名詞なら True。複合語(「制度改定」)は末尾の語で判定する。"""
+    from sudachipy import SplitMode
+
+    last = list(get_tokenizer().tokenize(morpheme.surface(), SplitMode.A))[-1]
+    return last.part_of_speech()[2] == "サ変可能" or last.surface() in _TOPIC_ACTION_NOUNS
+
+
+def detect_topic_shift_subject(tokenized: list[TokenizedSentence], raw_text: str) -> list[Finding]:
+    heading_lines = sorted(no for no, line in iter_lines_with_no(raw_text) if _HEADING_RE.match(line))
+    raw_lines_by_no = dict(iter_lines_with_no(raw_text))
+    findings = []
+    for idx, ts in enumerate(tokenized):
+        found = _topic_subject_nouns(ts)
+        if not found:
+            continue
+        nouns, wa = found
+        content = [m for m in nouns if m.surface() not in _TOPIC_GENERIC_NOUNS and m.part_of_speech()[1] != "数詞"]
+        if not content:
+            continue
+        if not _is_action_noun(content[-1]):
+            continue
+        context = tokenized[idx - 1].raw_text if idx > 0 else ""
+        prior_headings = [no for no in heading_lines if no < ts.line]
+        if prior_headings:
+            context += raw_lines_by_no.get(prior_headings[-1], "")
+        if any(m.surface() in context or m.normalized_form() in context for m in content):
+            continue
+        subject = ts.raw_text[ts.morphemes[0].begin() : ts.morphemes[wa].end()].strip()
+        findings.append(
+            Finding(
+                line=ts.line,
+                category="topic_shift_subject",
+                excerpt=ts.raw_text.strip()[:60],
+                severity="info",
+                detail=(
+                    f"主語「{subject}」の名詞が、直前の文にも直前の見出しにも出てこない。"
+                    "話題になっていないものを急に主語に立てて説明している疑い"
+                ),
+            )
+        )
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # 構造層検出器（2026-07 コーパス校正で新設）
 #
 # ここまでの検出器はすべて Markdown 構造をマスクした「地の文」に対して働く。
@@ -2312,6 +2408,7 @@ HINTS = {
     "high_bold_density": "文中の強調の太字は、文書全体で本当に目立たせたい数か所だけに残す。箇条や行の頭の「**ラベル**:」は、項目を探す目印なので残してよい",
     "high_bullet_ratio": "因果や経緯のある箇条書きは地の文に戻す。宿題の一覧のように本当に独立した項目は残す",
     "boilerplate_heading": "「まとめ」「おわりに」のような見出しをやめ、結論そのものを見出しにするか、見出しなしで締める",
+    "topic_shift_subject": "その名詞が、前の文や見出しで話題になっているかを見る。話題になっていて、その説明として読めるなら残す。話題になっていないなら、主語の流れを前の文に合わせる。書き手自身の行為(刷新・変更・この記事)を主語に立てているなら、目的は行為を書いた文に「〜よう」「〜ため」でつなぐ(「今回の刷新は、〜を解消するための取り組みです」→「〜を解消できるよう、システムを刷新しました」)",
     "copy_style_heading": "話題を示す名詞句(「申請の流れ」)か、述語まで言い切る文(「申請は窓口に行かずに終わる」)にする。省いた述語や「何がどうなるか」は、その節の本文にある言葉で書く。本文にないなら足さず、話題を示す名詞句にとどめる。同じ形の見出しが並ぶなら、全部をまとめて見直す",
     "numbered_phase_structure":"内容がもともと段階を持つときだけ番号を付ける",
     "high_emoji_symbol_density": "絵文字や装飾記号を外す。区分のラベルとして働いているものだけ残す",
@@ -2383,6 +2480,7 @@ def run_lint(
     )
     findings += nominal_and_conj_findings
     findings += detect_inanimate_subject_morph(tokenized)
+    findings += detect_topic_shift_subject(tokenized, mask_html_comments(raw_text))
     # nested_attributive はコーパス校正で削除済み（上のコメント参照）。
 
     rhythm_findings, rhythm_stats = detect_rhythm_statistics(tokenized)
