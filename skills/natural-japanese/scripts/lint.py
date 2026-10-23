@@ -1906,11 +1906,17 @@ def detect_structural_ai_habits(raw_text: str) -> tuple[list[Finding], dict]:
 #
 # 読点があるだけでは数えない。「打ち消しは、中身のあるものだけを残す」のように、
 # 主題の「は」のあとで区切って述語まで言い切る見出しは、ふつうの句読法である。
-# コピー調として数えるのは次の2つ。
+# コピー調として数えるのは次の3つ。
 #   - 読点で前後に割り、末尾で述語を省いている。前後に割る読点とは、直前が助詞か、
 #     動詞・形容詞・助動詞の連用形のもの。直前が名詞の読点(「東京、大阪」「在宅勤務、
 #     三年やってみて」)と、並列の「と、」、括弧やかぎ括弧の中の読点は数えない
 #   - 20字以下の短い見出しで、「を」の直後に読点を打ち、目的語と動詞を切り離している
+#   - 「〜で、」「〜まで、」「〜れば、」のように助詞で読点を打って前後に割り、述語で閉じていても、
+#     その述語が何が起きるかをぼかす動詞(止まる・動く・途切れる・つながる など)か
+#     「名詞+に+する」(一続きにする)のもの(「入力の手前で、利用者も職員も止まっている」
+#     「製造と物流の現場で、すでに動いています」)。述語がサ変名詞の行為
+#     (「取引先とともに、受付から検品までを実証しています」)や、何をするかがはっきりした動詞
+#     (残す・返す・聞く)なら数えない。読点の直前が「は」「が」「も」なら、主題のあとの読点なので数えない
 #
 # コピー調であること自体は構わない。人も事例紹介・広報・エッセイのタイトルでは
 # この形を使う。次のどれかに当たるときだけ警告にし、どれにも当たらなければ
@@ -1973,6 +1979,31 @@ def _ends_with_predicate(morphemes: list) -> bool:
     return pos[0] in {"動詞", "形容詞", "助動詞"} and pos[5].startswith("終止形")
 
 
+# 何が起きるかをぼかす動詞(本家 v1.6.1 の「効く・届く・動く」と同じ種類)
+_VAGUE_HEADING_VERBS = {
+    "動く", "止まる", "途切れる", "途絶える", "つながる", "繋がる", "つなぐ", "繋ぐ", "回る", "進む",
+    "変わる", "変える", "広がる", "生まれる", "届く", "効く", "響く", "流れる", "走る", "寄り添う",
+    "支える", "動かす", "止める", "加速する", "変わり始める",
+}
+
+
+def _ends_with_figurative_verb(morphemes: list) -> bool:
+    """述語が何が起きるかをぼかす動詞か「名詞+に+する」なら True。"""
+    content = _content_morphemes(morphemes)
+    for i in range(len(content) - 1, -1, -1):
+        m = content[i]
+        pos = m.part_of_speech()
+        if pos[0] in {"助動詞", "助詞"}:
+            continue
+        if pos[0] == "動詞" and m.dictionary_form() == "する":
+            prev = content[i - 1] if i else None
+            return bool(prev) and prev.surface() == "に" and prev.part_of_speech()[0] == "助詞"
+        if pos[0] == "動詞" and pos[1] == "非自立可能":
+            continue
+        return pos[0] == "動詞" and m.dictionary_form() in _VAGUE_HEADING_VERBS
+    return False
+
+
 def _heading_not_closed(morphemes: list, split: int) -> bool:
     """見出しとして文が閉じていないなら True(条件2)。"""
     content = _content_morphemes(morphemes)
@@ -2017,7 +2048,13 @@ def detect_copy_style_headings(raw_text: str) -> list[Finding]:
         if split is None:
             continue
         short_wo = wo and len(heading) <= COPY_HEADING_WO_MAX_CHARS
-        if _ends_with_predicate(morphemes) and not short_wo:
+        connector = morphemes[split - 1]
+        figurative = (
+            connector.part_of_speech()[0] in {"助詞", "助動詞"}
+            and connector.surface() not in _COPY_HEADING_SUBJECT_MARKERS
+            and _ends_with_figurative_verb(morphemes)
+        )
+        if _ends_with_predicate(morphemes) and not short_wo and not figurative:
             continue
         reasons = []
         if _heading_not_closed(morphemes, split):
