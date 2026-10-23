@@ -1780,12 +1780,17 @@ def detect_structural_ai_habits(raw_text: str) -> tuple[list[Finding], dict]:
 #      読点(「東京、大阪」「在宅勤務、三年やってみて」)と、並列の「と、」は数えない
 #   2. 「を」の直後に読点を打ち、目的語と動詞を切り離している(「相談を、申請完了までつなぐ」)
 #   3. 見出しの末尾に「。」がある(見出しを一文のコピーとして書いた印)
+#
+# 同じ関数で、読み手への呼びかけで終わる見出し(「まずは触ってみてください」)も
+# appeal_heading として拾う。見出しが節の事実(日付・対象・機能名)を言わず、
+# 読み手に行動を促すだけになっている形である。
 # ---------------------------------------------------------------------------
 COPY_HEADING_MAX_CHARS = 40
 _COPY_HEADING_PARTICLES = {"格助詞", "係助詞", "副助詞", "接続助詞"}
 _HEADING_MARKUP_RE = re.compile(r"^\s*#{1,6}\s*|\s*#+\s*$|\*\*|__")
 # 括弧の中は補足なので、読点の判定から外す
 _HEADING_PAREN_RE = re.compile(r"[（(][^）)]*[）)]")
+_APPEAL_HEADING_RE = re.compile(r"(?:ください|ましょう|ませんか|てみよう|しよう)[。！!?？]?$")
 
 
 def _heading_commas(morphemes: list) -> tuple[bool, bool]:
@@ -1822,6 +1827,7 @@ def detect_copy_style_headings(raw_text: str) -> list[Finding]:
     from sudachipy import SplitMode
 
     hits: list[tuple[int, str, list[str]]] = []
+    appeals: list[tuple[int, str]] = []
     in_fence = False
     for no, line in iter_lines_with_no(raw_text):
         if re.match(r"^\s*(`{3,}|~{3,})", line):
@@ -1845,8 +1851,19 @@ def detect_copy_style_headings(raw_text: str) -> list[Finding]:
             reasons.append("見出しの末尾に「。」がある")
         if reasons:
             hits.append((no, heading, reasons))
+        if _APPEAL_HEADING_RE.search(heading):
+            appeals.append((no, heading))
 
-    findings = []
+    findings = [
+        Finding(
+            line=no,
+            category="appeal_heading",
+            excerpt=heading,
+            severity="warn",
+            detail="見出しが読み手への呼びかけで終わっている。見出しだけ読んでも、その節に何が書いてあるかが分からない",
+        )
+        for no, heading in appeals
+    ]
     related = [no for no, _, _ in hits] if len(hits) > 1 else None
     for no, heading, reasons in hits:
         detail = "。".join(reasons) + "。コピー調の見出しは、見出しだけ読んでも何がどうなるのかが分からない"
