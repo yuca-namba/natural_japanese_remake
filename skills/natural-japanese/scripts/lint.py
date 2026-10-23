@@ -1765,6 +1765,107 @@ def detect_structural_ai_habits(raw_text: str) -> tuple[list[Finding], dict]:
 
 
 # ---------------------------------------------------------------------------
+# コピー調の見出し（「こんなシーンで、かんたんに」「相談を、申請完了までつなぐ」）
+#
+# 短い見出しを読点で前後に割り、後半で述語を省くか、助詞の直後に読点を打って
+# 調子を付けた形。広告やサービス紹介ページのコピーの文体で、見出しだけ読んでも
+# 何がどうなるのかが分からない。語ではなく文の組み立ての癖なので、禁止語の
+# カタログでは拾えず、品詞の並びで見る。
+#
+# 読点があるだけでは数えない。「打ち消しは、中身のあるものだけを残す」のように、
+# 主題の「は」のあとで区切って述語まで言い切る見出しは、ふつうの句読法である。
+# 数えるのは次の3つ。
+#   1. 読点で前後に割り、末尾で述語を省いている(「こんなシーンで、かんたんに」)。
+#      前後に割る読点とは、直前が助詞か、動詞・形容詞・助動詞の連用形のもの。直前が名詞の
+#      読点(「東京、大阪」「在宅勤務、三年やってみて」)と、並列の「と、」は数えない
+#   2. 「を」の直後に読点を打ち、目的語と動詞を切り離している(「相談を、申請完了までつなぐ」)
+#   3. 見出しの末尾に「。」がある(見出しを一文のコピーとして書いた印)
+# ---------------------------------------------------------------------------
+COPY_HEADING_MAX_CHARS = 40
+_COPY_HEADING_PARTICLES = {"格助詞", "係助詞", "副助詞", "接続助詞"}
+_HEADING_MARKUP_RE = re.compile(r"^\s*#{1,6}\s*|\s*#+\s*$|\*\*|__")
+# 括弧の中は補足なので、読点の判定から外す
+_HEADING_PAREN_RE = re.compile(r"[（(][^）)]*[）)]")
+
+
+def _heading_commas(morphemes: list) -> tuple[bool, bool]:
+    """(前後に割る読点があるか, 「を、」があるか) を返す。"""
+    split = wo = False
+    for i, m in enumerate(morphemes):
+        pos = m.part_of_speech()
+        if not (pos[0] == "補助記号" and pos[1] == "読点") or i == 0:
+            continue
+        prev = morphemes[i - 1]
+        ppos = prev.part_of_speech()
+        if ppos[0] == "助詞" and ppos[1] in _COPY_HEADING_PARTICLES and prev.surface() != "と":
+            split = True
+            wo = wo or (ppos[1] == "格助詞" and prev.surface() == "を")
+        elif ppos[0] in {"動詞", "形容詞", "助動詞"} and ppos[5].startswith("連用形"):
+            split = True
+    return split, wo
+
+
+def _ends_with_predicate(morphemes: list) -> bool:
+    """末尾(記号を除く)が動詞・形容詞・助動詞の終止形か、終助詞なら True。"""
+    for m in reversed(morphemes):
+        pos = m.part_of_speech()
+        if pos[0] in TRAILING_SYMBOL_POS:
+            continue
+        if pos[0] == "助詞" and pos[1] == "終助詞":
+            return True
+        return pos[0] in {"動詞", "形容詞", "助動詞"} and pos[5].startswith("終止形")
+    return False
+
+
+def detect_copy_style_headings(raw_text: str) -> list[Finding]:
+    tokenizer = get_tokenizer()
+    from sudachipy import SplitMode
+
+    hits: list[tuple[int, str, list[str]]] = []
+    in_fence = False
+    for no, line in iter_lines_with_no(raw_text):
+        if re.match(r"^\s*(`{3,}|~{3,})", line):
+            in_fence = not in_fence
+            continue
+        if in_fence or not _HEADING_RE.match(line):
+            continue
+        heading = _HEADING_MARKUP_RE.sub("", line).strip()
+        if not heading or len(heading) > COPY_HEADING_MAX_CHARS:
+            continue
+        reasons = []
+        body = _HEADING_PAREN_RE.sub("", heading).replace("，", "、")
+        if "、" in body:
+            morphemes = list(tokenizer.tokenize(body, SplitMode.C))
+            split, wo = _heading_commas(morphemes)
+            if split and not _ends_with_predicate(morphemes):
+                reasons.append("読点で見出しを前後に割り、末尾で述語を省いている")
+            if wo:
+                reasons.append("「を」の直後に読点を打ち、目的語と動詞を切り離している")
+        if heading.endswith("。"):
+            reasons.append("見出しの末尾に「。」がある")
+        if reasons:
+            hits.append((no, heading, reasons))
+
+    findings = []
+    related = [no for no, _, _ in hits] if len(hits) > 1 else None
+    for no, heading, reasons in hits:
+        detail = "。".join(reasons) + "。コピー調の見出しは、見出しだけ読んでも何がどうなるのかが分からない"
+        if related:
+            detail += f"（同じ形の見出しが文書に{len(hits)}個ある）"
+        findings.append(
+            Finding(
+                line=no,
+                category="copy_style_heading",
+                excerpt=heading,
+                severity="warn",
+                detail=detail,
+                related_lines=related,
+            )
+        )
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # 読みにくそうな箇所の検査（推敲で見る箇所を示すだけ）
 #
 # ここに並ぶ検出器は「AI臭さ」を測らない。自然度スコアにも、by_category 集計にも、
@@ -2194,7 +2295,8 @@ HINTS = {
     "high_bold_density": "文中の強調の太字は、文書全体で本当に目立たせたい数か所だけに残す。箇条や行の頭の「**ラベル**:」は、項目を探す目印なので残してよい",
     "high_bullet_ratio": "因果や経緯のある箇条書きは地の文に戻す。宿題の一覧のように本当に独立した項目は残す",
     "boilerplate_heading": "「まとめ」「おわりに」のような見出しをやめ、結論そのものを見出しにするか、見出しなしで締める",
-    "numbered_phase_structure": "内容がもともと段階を持つときだけ番号を付ける",
+    "copy_style_heading": "話題を示す名詞句(「申請の流れ」)か、述語まで言い切る文(「申請は窓口に行かずに終わる」)にする。省いた述語や「何がどうなるか」は、その節の本文にある言葉で書く。本文にないなら足さず、話題を示す名詞句にとどめる。同じ形の見出しが並ぶなら、全部をまとめて見直す",
+    "numbered_phase_structure":"内容がもともと段階を持つときだけ番号を付ける",
     "high_emoji_symbol_density": "絵文字や装飾記号を外す。区分のラベルとして働いているものだけ残す",
     "sentence_too_long": "主張が二つ以上あれば、主張ごとに文を分ける。分けて字数が増えるのはかまわない。元にない接続の言葉は足さない",
     "kanji_run": "ひらがなを交えて開く（「再送抑制機能」→「再送を止める機能」）。固有名詞はそのままでよい",
@@ -2242,6 +2344,7 @@ def run_lint(
 
     findings: list[Finding] = []
     findings += structural_findings
+    findings += detect_copy_style_headings(mask_html_comments(raw_text))
     # --- 表層（正規表現）ベースの検出器 ---
     findings += detect_forbidden_phrases(lines, raw_lines_by_no)
     findings += detect_translationese(lines, raw_lines_by_no)
