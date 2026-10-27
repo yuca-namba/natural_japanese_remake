@@ -2,6 +2,17 @@
 
 このリポジトリは [coji/natural-japanese](https://github.com/coji/natural-japanese) のフォークです。本家の規則と検査スクリプトに、自分が AI の文章で気になる癖への対応を足しています。本家の更新は `git fetch upstream && git merge upstream/main` で取り込めます。
 
+## 入れ方と更新
+
+Claude Code のプラグインとして入れます。マーケットプレイスの名前を本家(natural-japanese)と分けて natural-japanese-remake にしているので、本家と同時に登録できます。ただし、スキルの名前はどちらも natural-japanese なので、本家の版を入れているなら先に外してください。
+
+```
+/plugin marketplace add yuca-namba/natural_japanese_remake
+/plugin install natural-japanese@natural-japanese-remake
+```
+
+`plugin.json` と `marketplace.json` にはバージョン番号を書いていません。番号がないと、Claude Code はコミットが変わるたびに新しい版として扱います。更新は `/plugin marketplace update natural-japanese-remake` で取り込みます。`/plugin` の「Marketplaces」でこのマーケットプレイスを選び、自動更新を有効にすると、セッションの開始時に取り込まれます。
+
 癖ごとに、どんな形か、なぜ AI がそう書くのか、どう防ぐかを書きます。
 
 ## コピー調の見出し

@@ -3,6 +3,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/coji/natural-japanese)](https://github.com/coji/natural-japanese/releases)
 
+> **このリポジトリについて:** [coji/natural-japanese](https://github.com/coji/natural-japanese) を元にしたカスタム版です。足した規則と経緯は [CUSTOMIZATION.md](./CUSTOMIZATION.md) にあります。Claude Code には次のコマンドで入れます。
+>
+> ```
+> /plugin marketplace add yuca-namba/natural_japanese_remake
+> /plugin install natural-japanese@natural-japanese-remake
+> ```
+
 AI に書かせた仕事の日本語を、読みやすく直す [Agent Skill](https://docs.claude.com/en/docs/claude-code/skills) です。議事録、レポート、技術記事、PR の説明文などを、新しく書くときにも使えます。
 
 > **English summary:** An Agent Skill that makes AI-written Japanese work documents read naturally. It never adds facts, opinions, or certainty that the original did not have.
